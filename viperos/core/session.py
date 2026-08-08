@@ -7,14 +7,15 @@ has finished its normal boot. From here on, the running system is
 OS underneath are stock Alpine.
 
 Responsibilities, in order:
-  1. Set up logging.
-  2. Register and start critical services (registry.py). Any failure
-     here is fatal - it propagates and the OpenRC service is expected
-     to fail/respawn, same as any other init-managed service.
-  3. Initialize modman and run configured startup modules through
+  1. Register and start critical services (registry.py), starting with
+     logging_service - once it's up, everything else logs through it
+     instead of print(). Any failure here is fatal - it propagates and
+     the OpenRC service is expected to fail/respawn, same as any other
+     init-managed service.
+  2. Initialize modman and run configured startup modules through
      modman.call(), so a broken user module degrades gracefully instead
      of blocking the rest of session startup.
-  4. Hand off to whatever the configured run mode is (currently: just
+  3. Hand off to whatever the configured run mode is (currently: just
      the `viper` CLI, run in the foreground).
 
 Run manually for local testing with:
@@ -22,8 +23,8 @@ Run manually for local testing with:
 """
 
 import sys
-from datetime import datetime, timezone
 
+from viperos.core import logging_service
 from viperos.core import modman
 from viperos.core.registry import Registry
 
@@ -35,47 +36,52 @@ STARTUP_MODULES = [
 ]
 
 
-def log(message: str) -> None:
-    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    print(f"[{ts}] {message}", flush=True)
-
-
-def _start_core_placeholder() -> None:
-    # Placeholder critical service - real critical services (e.g. a
-    # config loader, a device manager, whatever ViperOS ends up needing
-    # at its core) get registered the same way this one is.
-    log("[core] placeholder critical service started")
+def _bootstrap_log(message: str) -> None:
+    # Used ONLY before logging_service has started - there's a real
+    # chicken-and-egg moment where the registry needs to report progress
+    # on starting the logging service itself, before that service exists
+    # to log through. Everything after logging_service.start() succeeds
+    # should go through a real logger instead.
+    print(f"[bootstrap] {message}", flush=True)
 
 
 def build_registry() -> Registry:
     registry = Registry()
-    registry.register("core-placeholder", _start_core_placeholder)
+    # logging_service goes first: nothing else should log through print()
+    # once this is up.
+    registry.register("logging", logging_service.start)
     return registry
 
 
-def run_startup_modules() -> None:
+def run_startup_modules(logger) -> None:
     for name in STARTUP_MODULES:
-        result, used_fallback = modman.call(name, "run", log=log)
+        result, used_fallback = modman.call(name, "run", log=logger.info)
         if used_fallback:
-            log(f"[session] module '{name}' ran from stock fallback "
-                f"(active version had a problem - check `modman versions {name}`)")
+            logger.warning(
+                f"module '{name}' ran from stock fallback "
+                f"(active version had a problem - check `modman versions {name}`)"
+            )
 
 
 def main() -> int:
-    log("ViperOS session starting")
+    _bootstrap_log("ViperOS session starting")
 
     registry = build_registry()
     try:
-        registry.start_all(log=log)
+        registry.start_all(log=_bootstrap_log)
     except Exception as exc:
-        log(f"[session] CRITICAL: a core service failed to start: {exc}")
+        _bootstrap_log(f"CRITICAL: a core service failed to start: {exc}")
         # Critical failures are fatal by design - let OpenRC's supervision
         # handle recovery rather than trying to limp forward.
         return 1
 
-    run_startup_modules()
+    # Logging is now up - switch to it for everything else.
+    logger = logging_service.get_logger("session")
+    logger.info("Critical services started successfully.")
 
-    log("ViperOS session ready.")
+    run_startup_modules(logger)
+
+    logger.info("ViperOS session ready.")
     return 0
 
 
