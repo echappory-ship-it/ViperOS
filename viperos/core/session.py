@@ -12,15 +12,18 @@ Responsibilities, in order:
      every path other services need already exists with correct
      permissions), then logging_service (once it's up, everything else
      logs through it instead of print()), then shutdown (installs
-     SIGTERM/SIGINT handlers that run every service's stop() hook in
-     reverse order). Any failure here is fatal - it propagates and the
-     OpenRC service is expected to fail/respawn, same as any other
-     init-managed service.
+     SIGTERM/SIGINT handlers). Any failure here is fatal - it propagates
+     and the OpenRC service is expected to fail/respawn, same as any
+     other init-managed service.
   2. Initialize modman and run configured startup modules through
      modman.call(), so a broken user module degrades gracefully instead
      of blocking the rest of session startup.
-  3. Hand off to whatever the configured run mode is (currently: just
-     the `viper` CLI, run in the foreground).
+  3. Enter the foreground run loop: block until a shutdown is requested
+     (SIGTERM/SIGINT, handled by shutdown.py), then run every critical
+     service's stop() hook in reverse order via registry.stop_all().
+
+This is a genuinely long-running foreground process now - `viper session
+start` will block until you send it SIGTERM or hit Ctrl+C (SIGINT).
 
 Run manually for local testing with:
     python3 -m viperos.core.session
@@ -37,11 +40,9 @@ from viperos.core.registry import Registry
 
 
 def _bootstrap_log(message: str) -> None:
-    # Used ONLY before logging_service has started - there's a real
-    # chicken-and-egg moment where the registry needs to report progress
-    # on starting the logging service itself, before that service exists
-    # to log through. Everything after logging_service.start() succeeds
-    # should go through a real logger instead.
+    # Used before logging_service has started, AND after it has stopped
+    # (during final shutdown, once logging's own stop() has already
+    # closed its handlers) - anywhere we can't rely on a live logger.
     print(f"[bootstrap] {message}", flush=True)
 
 
@@ -57,10 +58,9 @@ def build_registry() -> Registry:
     # once this is up. Has a real stop hook - flushes/closes handlers
     # cleanly during graceful shutdown.
     registry.register("logging", logging_service.start, stop_fn=logging_service.stop)
-    # shutdown goes last: it needs the registry itself (to call
-    # stop_all() when a signal arrives), captured via closure here since
-    # Registry.register() only calls zero-argument start functions.
-    registry.register("shutdown", lambda: shutdown.install(registry))
+    # shutdown goes last: installs signal handlers that just set a flag
+    # (see shutdown.py) - the run loop below is what actually reacts to it.
+    registry.register("shutdown", shutdown.install)
     return registry
 
 
@@ -87,13 +87,26 @@ def main() -> int:
         # handle recovery rather than trying to limp forward.
         return 1
 
-    # Logging is now up - switch to it for everything else.
+    # Logging is now up - switch to it for everything else, until it
+    # stops again during shutdown below.
     logger = logging_service.get_logger("session")
     logger.info("Critical services started successfully.")
 
     run_startup_modules(logger)
 
-    logger.info("ViperOS session ready.")
+    logger.info("ViperOS session ready. Waiting for shutdown signal (SIGTERM/SIGINT)...")
+
+    # Foreground run loop: block here until shutdown.py's signal handler
+    # sets the shutdown flag. This is the actual "session" - everything
+    # before this point was startup, everything after is shutdown.
+    shutdown.wait_for_shutdown()
+
+    logger.info("Shutdown requested - stopping critical services.")
+    registry.stop_all(log=logger.info)
+    # logging's stop() hook has now closed its own handlers as part of
+    # stop_all() above - drop back to bootstrap-style printing for the
+    # final line, same as we do before logging starts.
+    _bootstrap_log("ViperOS session stopped.")
     return 0
 
 
