@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies (if any)
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install pytest
+
+      - name: Syntax check all Python files
+        run: |
+          find . -name "*.py" -not -path "./.venv/*" -print0 \
+            | xargs -0 -n1 python -m py_compile
+
+      - name: Import core modules
+        run: |
+          export PYTHONPATH="$PWD"
+          python -c "from viperos.core import modman"
+          python -c "from viperos.core import registry"
+          python -c "from viperos.core import session"
+          python -c "from viperos.cli import viper"
+
+      - name: Run tests (if any exist)
+        run: |
+          export PYTHONPATH="$PWD"
+          if [ -d tests ] || find . -name "test_*.py" -not -path "./.venv/*" | grep -q .; then
+            pytest -q
+          else
+            echo "No tests found yet - skipping pytest."
+          fi
