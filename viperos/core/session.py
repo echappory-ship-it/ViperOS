@@ -7,11 +7,12 @@ has finished its normal boot. From here on, the running system is
 OS underneath are stock Alpine.
 
 Responsibilities, in order:
-  1. Register and start critical services (registry.py), starting with
-     logging_service - once it's up, everything else logs through it
-     instead of print(). Any failure here is fatal - it propagates and
-     the OpenRC service is expected to fail/respawn, same as any other
-     init-managed service.
+  1. Register and start critical services (registry.py): state_dirs
+     first (so every path other services need already exists with
+     correct permissions), then logging_service - once it's up,
+     everything else logs through it instead of print(). Any failure
+     here is fatal - it propagates and the OpenRC service is expected
+     to fail/respawn, same as any other init-managed service.
   2. Initialize modman and run configured startup modules through
      modman.call(), so a broken user module degrades gracefully instead
      of blocking the rest of session startup.
@@ -26,6 +27,7 @@ import sys
 
 from viperos.core import logging_service
 from viperos.core import modman
+from viperos.core import state_dirs
 from viperos.core.registry import Registry
 
 # Modules modman should try to run at session startup, in order.
@@ -47,7 +49,10 @@ def _bootstrap_log(message: str) -> None:
 
 def build_registry() -> Registry:
     registry = Registry()
-    # logging_service goes first: nothing else should log through print()
+    # state_dirs goes first: logging (and modman, and everything after)
+    # assumes its directories already exist with correct permissions.
+    registry.register("state-dirs", state_dirs.start)
+    # logging_service goes next: nothing else should log through print()
     # once this is up.
     registry.register("logging", logging_service.start)
     return registry
