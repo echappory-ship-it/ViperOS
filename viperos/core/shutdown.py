@@ -1,57 +1,60 @@
 """
-shutdown.py - ViperOS's fourth critical service: graceful shutdown handling.
+shutdown.py - ViperOS's graceful shutdown critical service.
 
-Installs SIGTERM/SIGINT handlers that, when received, run every
-registered critical service's stop() hook (in reverse start order, via
-registry.stop_all()) before the process actually exits. This is what
-lets services like logging flush/close cleanly instead of the process
-just dying mid-write.
+Installs SIGTERM/SIGINT handlers that REQUEST a shutdown by setting a
+threading.Event, rather than doing real work inside the signal handler
+itself. This follows standard practice: signal handlers should do as
+little as possible. The actual shutdown sequence - running every
+critical service's stop() hook via registry.stop_all() - happens in
+normal code, in session.py's foreground run loop, once that loop wakes
+up from waiting on the event.
 
-Registered LAST in session.py's build_registry(), after logging, so the
-shutdown handler itself can log through a real logger rather than print().
-
-IMPORTANT SCOPE NOTE: as of this pass, viperos.core.session.main() runs
-its startup sequence and returns - it does not yet block/run as a real
-foreground process. That means in the current codebase, there generally
-isn't a meaningful window for these signal handlers to fire before the
-process would have exited on its own anyway. This service is correct and
-tested in isolation (see the manual test pattern below), but it only
-becomes practically meaningful once session.py grows an actual
-long-running foreground loop - that's a natural, separate next step,
-not something silently glossed over here.
+(Earlier version of this file called registry.stop_all() directly from
+inside the signal handler. That worked in testing, but running arbitrary
+I/O - file flushes, closes - inside a signal handler is fragile in
+general, e.g. if the signal happens to interrupt another log write.
+This version is the corrected, safer pattern.)
 """
 
 import signal
-import sys
+import threading
 
-from viperos.core import logging_service
-
-_registry = None
+_shutdown_event = threading.Event()
 _installed = False
 
 
-def install(registry) -> None:
+def install() -> None:
     """
-    Critical-service entrypoint. Takes the live Registry instance (via a
-    closure at registration time in session.py, since Registry.register()
-    only calls zero-argument start functions) and installs signal
-    handlers that will run registry.stop_all() on SIGTERM/SIGINT.
+    Critical-service entrypoint: install SIGTERM/SIGINT handlers. Takes
+    no arguments and does no I/O - deliberately minimal, per the module
+    docstring above.
     """
-    global _registry, _installed
-
-    _registry = registry
-    signal.signal(signal.SIGTERM, _handle_signal)
-    signal.signal(signal.SIGINT, _handle_signal)
+    global _installed
+    signal.signal(signal.SIGTERM, _request_shutdown)
+    signal.signal(signal.SIGINT, _request_shutdown)
     _installed = True
 
 
-def _handle_signal(signum, frame) -> None:
-    logger = logging_service.get_logger("shutdown")
-    signame = signal.Signals(signum).name
-    logger.info(f"Received {signame}, shutting down gracefully.")
+def _request_shutdown(signum, frame) -> None:
+    # Intentionally minimal: just record that a shutdown was requested.
+    # No logging, no cleanup - that all happens in session.py's run loop,
+    # outside of signal-handler context.
+    _shutdown_event.set()
 
-    if _registry is not None:
-        _registry.stop_all(log=logger.info)
 
-    logger.info("Shutdown complete.")
-    sys.exit(0)
+def wait_for_shutdown(timeout=None) -> bool:
+    """
+    Block the calling thread until a shutdown has been requested (or
+    timeout elapses). Returns True if a shutdown was requested, False on
+    timeout. This is what session.py's foreground loop blocks on.
+    """
+    return _shutdown_event.wait(timeout=timeout)
+
+
+def is_shutdown_requested() -> bool:
+    return _shutdown_event.is_set()
+
+
+def reset() -> None:
+    """Testing helper: clear the shutdown flag so it can be reused."""
+    _shutdown_event.clear()
