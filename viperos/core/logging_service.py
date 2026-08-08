@@ -18,6 +18,8 @@ import logging.handlers
 import os
 from pathlib import Path
 
+from viperos.core import config
+
 # Overridable for local/dev testing, same pattern as modman's MODMAN_ROOT.
 LOG_DIR = Path(os.environ.get("VIPEROS_LOG_DIR", "/var/log/viperos"))
 LOG_FILE = LOG_DIR / "viperos.log"
@@ -36,15 +38,19 @@ _configured = False
 def start() -> None:
     """
     Critical-service entrypoint: configure the root 'viperos' logger.
-    Registered with registry.py as the first service to start, since
-    every other service wants to be able to log.
+    Registered with registry.py after config and state_dirs - reads its
+    log level from config.get_config(), and assumes LOG_DIR already
+    exists (state_dirs' job).
     """
     global _configured
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+    log_level_name = config.get_config()["logging"]["level"]
+    log_level = getattr(logging, log_level_name.upper(), logging.INFO)
+
     logger = logging.getLogger(LOGGER_NAME)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(log_level)
     logger.propagate = False
 
     # Avoid stacking duplicate handlers if start() is somehow called twice
@@ -66,7 +72,7 @@ def start() -> None:
     logger.addHandler(console_handler)
 
     _configured = True
-    logger.info(f"Logging initialized. Writing to {LOG_FILE}")
+    logger.info(f"Logging initialized at level {log_level_name.upper()}. Writing to {LOG_FILE}")
 
 
 def get_logger(name: str) -> logging.Logger:
