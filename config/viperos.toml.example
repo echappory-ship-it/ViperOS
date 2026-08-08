@@ -1,0 +1,15 @@
+# ViperOS system config.
+#
+# Install this to /etc/viperos/config.toml (or point VIPEROS_CONFIG at a
+# custom location for testing). If this file is missing entirely,
+# ViperOS falls back to built-in defaults - see viperos/core/config.py.
+
+[session]
+# Non-critical modules (managed by modman) that should run at session
+# startup, in order. Each one must already be registered with modman
+# (`viper mod init <name> <script>`) - by the image build, or by hand.
+startup_modules = ["greeter"]
+
+[logging]
+# One of: DEBUG, INFO, WARNING, ERROR, CRITICAL
+level = "INFO"
