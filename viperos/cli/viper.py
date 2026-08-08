@@ -47,13 +47,12 @@ def _cmd_status(args) -> int:
 
     print()
     print("  modules (modman):")
-    registry = modman._load_registry()
-    modules = registry.get("modules", {})
+    modules = modman.list_modules()
     if not modules:
         print("    (none registered yet - see `viper mod init`)")
     else:
-        for name, entry in modules.items():
-            print(f"    {name:<20} active={entry.get('active_version', 'stock')}")
+        for name, active_version in modules.items():
+            print(f"    {name:<20} active={active_version}")
 
     return 0
 
