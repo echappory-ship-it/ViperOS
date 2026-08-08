@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+# viperos-session - starts the ViperOS Python session layer.
+#
+# This is intentionally the LAST service to start. Everything Alpine
+# normally needs (filesystems, networking, syslog, etc.) should already
+# be up by the time this runs. Install into /etc/init.d/ and add to the
+# default runlevel with:
+#
+#   rc-update add viperos-session default
+
+name="ViperOS Session"
+description="Starts the ViperOS Python session layer on top of Alpine base."
+
+command="/usr/bin/python3"
+command_args="-m viperos.core.session"
+command_background="yes"
+pidfile="/run/viperos-session.pid"
+
+# Make sure we start after the standard default runlevel is otherwise up.
+depend() {
+    after *
+    keyword -shutdown
+}
