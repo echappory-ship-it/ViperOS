@@ -7,12 +7,13 @@ has finished its normal boot. From here on, the running system is
 OS underneath are stock Alpine.
 
 Responsibilities, in order:
-  1. Register and start critical services (registry.py): state_dirs
-     first (so every path other services need already exists with
-     correct permissions), then logging_service - once it's up,
-     everything else logs through it instead of print(). Any failure
-     here is fatal - it propagates and the OpenRC service is expected
-     to fail/respawn, same as any other init-managed service.
+  1. Register and start critical services (registry.py): config first
+     (so everything after can read config values), then state_dirs (so
+     every path other services need already exists with correct
+     permissions), then logging_service - once it's up, everything else
+     logs through it instead of print(). Any failure here is fatal - it
+     propagates and the OpenRC service is expected to fail/respawn, same
+     as any other init-managed service.
   2. Initialize modman and run configured startup modules through
      modman.call(), so a broken user module degrades gracefully instead
      of blocking the rest of session startup.
@@ -25,17 +26,11 @@ Run manually for local testing with:
 
 import sys
 
+from viperos.core import config
 from viperos.core import logging_service
 from viperos.core import modman
 from viperos.core import state_dirs
 from viperos.core.registry import Registry
-
-# Modules modman should try to run at session startup, in order.
-# Each must exist in modman's store (i.e. `modman init <name> <path>`
-# has been run at some point - by the image build, or by the user).
-STARTUP_MODULES = [
-    "greeter",
-]
 
 
 def _bootstrap_log(message: str) -> None:
@@ -49,7 +44,10 @@ def _bootstrap_log(message: str) -> None:
 
 def build_registry() -> Registry:
     registry = Registry()
-    # state_dirs goes first: logging (and modman, and everything after)
+    # config goes first: state_dirs, logging, and startup module
+    # selection all potentially read from it.
+    registry.register("config", config.start)
+    # state_dirs next: logging (and modman, and everything after)
     # assumes its directories already exist with correct permissions.
     registry.register("state-dirs", state_dirs.start)
     # logging_service goes next: nothing else should log through print()
@@ -59,7 +57,8 @@ def build_registry() -> Registry:
 
 
 def run_startup_modules(logger) -> None:
-    for name in STARTUP_MODULES:
+    startup_modules = config.get_config()["session"]["startup_modules"]
+    for name in startup_modules:
         result, used_fallback = modman.call(name, "run", log=logger.info)
         if used_fallback:
             logger.warning(
