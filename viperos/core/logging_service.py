@@ -75,6 +75,25 @@ def start() -> None:
     logger.info(f"Logging initialized at level {log_level_name.upper()}. Writing to {LOG_FILE}")
 
 
+def stop() -> None:
+    """
+    Critical-service stop hook: flush and close all handlers cleanly so
+    log output isn't lost or left buffered when the process exits.
+    Called by registry.stop_all() during graceful shutdown, in reverse
+    start order (i.e. logging stops near-last, since other services'
+    stop hooks may still want to log while they clean up).
+    """
+    global _configured
+
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.info("Logging shutting down.")
+    for handler in list(logger.handlers):
+        handler.flush()
+        handler.close()
+        logger.removeHandler(handler)
+    _configured = False
+
+
 def get_logger(name: str) -> logging.Logger:
     """
     Get a logger for a given component, nested under the 'viperos'
