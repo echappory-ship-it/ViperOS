@@ -59,6 +59,27 @@ def _save_registry(registry: dict) -> None:
     tmp_path.replace(REGISTRY_PATH)
 
 
+# --------------------------------------------------------------------------
+# Public read-only API - safe for other ViperOS code (e.g. the CLI) to
+# call directly, unlike the _load_registry/_save_registry helpers above,
+# which are internal to modman's own read-modify-write operations.
+# --------------------------------------------------------------------------
+
+def list_modules() -> dict:
+    """
+    Return {module_name: active_version} for every module modman knows
+    about. Read-only - callers should use the CLI subcommands (or the
+    replace/activate functions below) to make changes, not edit the
+    returned dict.
+    """
+    registry = _load_registry()
+    modules = registry.get("modules", {})
+    return {
+        name: entry.get("active_version", "stock")
+        for name, entry in modules.items()
+    }
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -161,14 +182,13 @@ def cmd_replace(name: str, new_script_path: str, yes: bool = False) -> None:
 
 
 def cmd_list() -> None:
-    registry = _load_registry()
-    modules = registry.get("modules", {})
+    modules = list_modules()
     if not modules:
         print("No modules registered yet.")
         return
     print(f"{'MODULE':<25} {'ACTIVE VERSION':<30}")
-    for name, entry in modules.items():
-        print(f"{name:<25} {entry.get('active_version', 'stock'):<30}")
+    for name, active_version in modules.items():
+        print(f"{name:<25} {active_version:<30}")
 
 
 def cmd_versions(name: str) -> None:
